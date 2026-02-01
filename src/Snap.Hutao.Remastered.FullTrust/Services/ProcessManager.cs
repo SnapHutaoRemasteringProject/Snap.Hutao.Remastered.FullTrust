@@ -1,6 +1,6 @@
+using Snap.Hutao.Remastered.FullTrust.Models;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using Snap.Hutao.Remastered.FullTrust.Models;
 
 namespace Snap.Hutao.Remastered.FullTrust.Services;
 
@@ -9,6 +9,7 @@ public static class ProcessManager
     private static FullTrustProcessStartInfoRequest? storedRequest;
     private static Process? currentProcess;
     private static nint processHandle = nint.Zero;
+    private static nint mainThreadHandle = nint.Zero;
     private static readonly object lockObject = new();
 
     private const uint PROCESS_CREATE_THREAD = 0x0002;
@@ -20,7 +21,7 @@ public static class ProcessManager
     private const uint MEM_RESERVE = 0x00002000;
     private const uint PAGE_READWRITE = 0x04;
     private const uint THREAD_SUSPEND_RESUME = 0x0002;
-    
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern nint OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
 
@@ -36,10 +37,10 @@ public static class ProcessManager
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool WriteProcessMemory(nint hProcess, nint lpBaseAddress, byte[] lpBuffer, uint nSize, out nint lpNumberOfBytesWritten);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)]
     private static extern nint GetProcAddress(nint hModule, string lpProcName);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
     private static extern nint GetModuleHandle(string lpModuleName);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -59,6 +60,55 @@ public static class ProcessManager
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint ResumeThread(nint hThread);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcess(
+        string? lpApplicationName,
+        string lpCommandLine,
+        nint lpProcessAttributes,
+        nint lpThreadAttributes,
+        bool bInheritHandles,
+        uint dwCreationFlags,
+        nint lpEnvironment,
+        string? lpCurrentDirectory,
+        ref STARTUPINFO lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct STARTUPINFO
+    {
+        public int cb;
+        public string? lpReserved;
+        public string? lpDesktop;
+        public string? lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public nint lpReserved2;
+        public nint hStdInput;
+        public nint hStdOutput;
+        public nint hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_INFORMATION
+    {
+        public nint hProcess;
+        public nint hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    private const uint CREATE_SUSPENDED = 0x00000004;
+    private const uint CREATE_NEW_CONSOLE = 0x00000010;
+    private const uint CREATE_NO_WINDOW = 0x08000000;
 
     public static void StoreRequest(FullTrustProcessStartInfoRequest request)
     {
@@ -83,45 +133,47 @@ public static class ProcessManager
 
             try
             {
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = storedRequest.ApplicationName,
-                    Arguments = storedRequest.CommandLine,
-                    WorkingDirectory = storedRequest.CurrentDirectory,
-                    UseShellExecute = true,
-                    Verb = "runas",
-                    CreateNoWindow = (storedRequest.CreationFlags & 0x08000000) != 0 // CREATE_NO_WINDOW
-                };
+                var startupInfo = new STARTUPINFO();
+                startupInfo.cb = Marshal.SizeOf<STARTUPINFO>();
 
-                currentProcess = new Process { StartInfo = startInfo };
-                
-                if (currentProcess.Start())
-                {
-                    processHandle = OpenProcess(
-                        PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | 
-                        PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
-                        false,
-                        (uint)currentProcess.Id);
+                var processInfo = new PROCESS_INFORMATION();
 
-                    if (processHandle == nint.Zero)
-                    {
-                        Console.WriteLine($"Failed to open process handle. Error: {Marshal.GetLastWin32Error()}");
-                    }
+                string commandLine = string.IsNullOrEmpty(storedRequest.CommandLine)
+                    ? $"\"{storedRequest.ApplicationName}\""
+                    : $"\"{storedRequest.ApplicationName}\" {storedRequest.CommandLine}";
 
-                    return new FullTrustStartProcessResult
-                    {
-                        Succeeded = true,
-                        ProcessId = (uint)currentProcess.Id
-                    };
-                }
-                else
+                bool success = CreateProcess(
+                    null, // 使用命令行参数中的应用程序名
+                    commandLine,
+                    nint.Zero,
+                    nint.Zero,
+                    false,
+                    CREATE_SUSPENDED,
+                    nint.Zero,
+                    storedRequest.CurrentDirectory,
+                    ref startupInfo,
+                    out processInfo);
+
+                if (!success)
                 {
+                    int error = Marshal.GetLastWin32Error();
                     return new FullTrustStartProcessResult
                     {
                         Succeeded = false,
-                        ErrorMessage = "Failed to start process"
+                        ErrorMessage = $"Failed to create process with CREATE_SUSPENDED flag. Error code: {error}"
                     };
                 }
+
+                currentProcess = Process.GetProcessById(processInfo.dwProcessId);
+
+                processHandle = processInfo.hProcess;
+                mainThreadHandle = processInfo.hThread;
+
+                return new FullTrustStartProcessResult
+                {
+                    Succeeded = true,
+                    ProcessId = (uint)processInfo.dwProcessId
+                };
             }
             catch (Exception ex)
             {
@@ -138,15 +190,30 @@ public static class ProcessManager
     {
         lock (lockObject)
         {
-            if (currentProcess == null || processHandle == nint.Zero)
+            if (currentProcess == null)
             {
-                Console.WriteLine("No process running or process handle not available");
+                Console.WriteLine("No process running");
                 return false;
             }
 
             try
             {
                 Console.WriteLine($"Loading library: {request.LibraryName} from {request.LibraryPath}");
+
+                CloseHandle(processHandle);
+                // 重新打开进程句柄以获取必要的权限
+                processHandle = OpenProcess(
+                    PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
+                    PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
+                    false,
+                    (uint)currentProcess.Id);
+
+                if (processHandle == nint.Zero)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    Console.WriteLine($"Failed to open process handle with required permissions. Error: {error}");
+                    return false;
+                }
 
                 // 获取LoadLibraryW函数地址
                 nint kernel32Handle = GetModuleHandle("kernel32.dll");
@@ -176,14 +243,16 @@ public static class ProcessManager
 
                 if (allocatedMemory == nint.Zero)
                 {
-                    Console.WriteLine($"Failed to allocate memory in target process. Error: {Marshal.GetLastWin32Error()}");
+                    int error = Marshal.GetLastWin32Error();
+                    Console.WriteLine($"Failed to allocate memory in target process. Error: {error}");
                     return false;
                 }
 
                 // 写入DLL路径到目标进程
                 if (!WriteProcessMemory(processHandle, allocatedMemory, libraryPathBytes, size, out nint bytesWritten))
                 {
-                    Console.WriteLine($"Failed to write to process memory. Error: {Marshal.GetLastWin32Error()}");
+                    int error = Marshal.GetLastWin32Error();
+                    Console.WriteLine($"Failed to write to process memory. Error: {error}");
                     VirtualFreeEx(processHandle, allocatedMemory, 0, 0x8000); // MEM_RELEASE
                     return false;
                 }
@@ -201,16 +270,25 @@ public static class ProcessManager
 
                 if (remoteThread == nint.Zero)
                 {
-                    Console.WriteLine($"Failed to create remote thread. Error: {Marshal.GetLastWin32Error()}");
+                    int error = Marshal.GetLastWin32Error();
+                    Console.WriteLine($"Failed to create remote thread. Error: {error}");
                     VirtualFreeEx(processHandle, allocatedMemory, 0, 0x8000); // MEM_RELEASE
                     return false;
                 }
 
                 // 等待线程完成
-                uint waitResult = WaitForSingleObject(remoteThread, 5000); // 5秒超时
+                uint waitResult = WaitForSingleObject(remoteThread, 10000); // 10秒超时
                 if (waitResult == 0x00000102) // WAIT_TIMEOUT
                 {
                     Console.WriteLine("Timeout waiting for DLL load");
+                    CloseHandle(remoteThread);
+                    VirtualFreeEx(processHandle, allocatedMemory, 0, 0x8000); // MEM_RELEASE
+                    return false;
+                }
+                else if (waitResult == 0xFFFFFFFF) // WAIT_FAILED
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    Console.WriteLine($"Wait failed. Error: {error}");
                     CloseHandle(remoteThread);
                     VirtualFreeEx(processHandle, allocatedMemory, 0, 0x8000); // MEM_RELEASE
                     return false;
@@ -219,7 +297,8 @@ public static class ProcessManager
                 // 获取线程退出代码（即DLL的基地址）
                 if (!GetExitCodeThread(remoteThread, out uint exitCode))
                 {
-                    Console.WriteLine("Failed to get thread exit code");
+                    int error = Marshal.GetLastWin32Error();
+                    Console.WriteLine($"Failed to get thread exit code. Error: {error}");
                 }
                 else
                 {
@@ -235,6 +314,7 @@ public static class ProcessManager
             catch (Exception ex)
             {
                 Console.WriteLine($"Error loading library: {ex.Message}");
+                Console.WriteLine($"Stack trace: {ex.StackTrace}");
                 return false;
             }
         }
@@ -244,9 +324,9 @@ public static class ProcessManager
     {
         lock (lockObject)
         {
-            if (currentProcess == null)
+            if (currentProcess == null || mainThreadHandle == nint.Zero)
             {
-                Console.WriteLine("No process running");
+                Console.WriteLine("No process running or thread handle not available");
                 return false;
             }
 
@@ -254,38 +334,22 @@ public static class ProcessManager
             {
                 Console.WriteLine("Resuming main thread");
 
-                // 在实际的FullTrust实现中，进程是以CREATE_SUSPENDED标志创建的
-                // 主线程在创建时被挂起，需要恢复它
-                
-                // 获取进程的主线程ID
-                // 注意：Process.MainWindowHandle可能会返回0，如果进程没有窗口
-                // 我们使用一个更可靠的方法：枚举进程的线程
-                
-                // 简化实现：如果进程有主窗口句柄，尝试获取线程ID
-                if (currentProcess.MainWindowHandle != nint.Zero)
+                uint result = ResumeThread(mainThreadHandle);
+
+                if (result != unchecked((uint)-1))
                 {
-                    uint threadId = GetWindowThreadProcessId(currentProcess.MainWindowHandle, out _);
-                    if (threadId != 0)
-                    {
-                        nint threadHandle = OpenThread(THREAD_SUSPEND_RESUME, false, threadId);
-                        if (threadHandle != nint.Zero)
-                        {
-                            uint result = ResumeThread(threadHandle);
-                            CloseHandle(threadHandle);
-                            
-                            if (result != unchecked((uint)-1))
-                            {
-                                Console.WriteLine($"Resumed thread {threadId}, previous suspend count: {result}");
-                                return true;
-                            }
-                        }
-                    }
+                    Console.WriteLine($"Resumed main thread, previous suspend count: {result}");
+
+                    CloseHandle(mainThreadHandle);
+                    mainThreadHandle = nint.Zero;
+
+                    return true;
                 }
-                
-                // 备用方法：如果无法获取特定线程，至少进程已经启动
-                // 在实际使用中，FullTrust进程应该已经正确处理了线程恢复
-                Console.WriteLine("Process already running, assuming main thread is active");
-                return true;
+                else
+                {
+                    Console.WriteLine($"Failed to resume thread. Error: {Marshal.GetLastWin32Error()}");
+                    return false;
+                }
             }
             catch (Exception ex)
             {
@@ -304,7 +368,13 @@ public static class ProcessManager
                 CloseHandle(processHandle);
                 processHandle = nint.Zero;
             }
-            
+
+            if (mainThreadHandle != nint.Zero)
+            {
+                CloseHandle(mainThreadHandle);
+                mainThreadHandle = nint.Zero;
+            }
+
             currentProcess?.Dispose();
             currentProcess = null;
             storedRequest = null;
