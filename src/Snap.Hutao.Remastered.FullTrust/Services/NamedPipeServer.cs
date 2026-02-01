@@ -76,6 +76,7 @@ public class NamedPipeServer : IDisposable
                         await HandleRequestAsync(header);
                         break;
                     case PipePacketType.SessionTermination:
+                        Environment.Exit(Environment.ExitCode);
                         return;
                     default:
                         Console.Error.WriteLine($"Unknown packet type: {header.Type}");
