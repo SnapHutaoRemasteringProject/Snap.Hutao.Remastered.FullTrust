@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Text.Json;
 using Snap.Hutao.Remastered.FullTrust.Core.LifeCycle.InterProcess;
 using Snap.Hutao.Remastered.FullTrust.Models;
 
@@ -115,13 +116,13 @@ public class NamedPipeServer : IDisposable
 
     private async Task HandleCreateRequestAsync(PipePacketHeader header)
     {
-        var request = serverStream.ReadJsonContent<FullTrustProcessStartInfoRequest>(in header);
+        FullTrustProcessStartInfoRequest? request = serverStream.ReadJsonContent<FullTrustProcessStartInfoRequest>(in header);
         if (request != null)
         {
             // 存储请求以供后续使用
             ProcessManager.StoreRequest(request);
             
-            var responseHeader = new PipePacketHeader
+            PipePacketHeader responseHeader = new PipePacketHeader
             {
                 Version = PrivateNamedPipe.FullTrustVersion,
                 Type = PipePacketType.Response,
@@ -134,9 +135,9 @@ public class NamedPipeServer : IDisposable
 
     private async Task HandleStartProcessRequestAsync(PipePacketHeader header)
     {
-        var result = ProcessManager.StartStoredProcess();
+        FullTrustStartProcessResult result = ProcessManager.StartStoredProcess();
         
-        var responseHeader = new PipePacketHeader
+        PipePacketHeader responseHeader = new PipePacketHeader
         {
             Version = PrivateNamedPipe.FullTrustVersion,
             Type = PipePacketType.Response,
@@ -144,13 +145,13 @@ public class NamedPipeServer : IDisposable
             ContentType = PipePacketContentType.Json
         };
         
-        serverStream.WritePacket(ref responseHeader, System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(result));
+        serverStream.WritePacket(ref responseHeader, JsonSerializer.SerializeToUtf8Bytes(result, AppJsonContext.Default.FullTrustStartProcessResult));
     }
 
     private async Task HandleLoadLibraryRequestAsync(PipePacketHeader header)
     {
-        var request = serverStream.ReadJsonContent<FullTrustLoadLibraryRequest>(in header);
-        var result = new FullTrustGenericResult { Succeeded = true };
+        FullTrustLoadLibraryRequest? request = serverStream.ReadJsonContent<FullTrustLoadLibraryRequest>(in header);
+        FullTrustGenericResult result = new FullTrustGenericResult { Succeeded = true };
         
         if (request != null)
         {
@@ -167,7 +168,7 @@ public class NamedPipeServer : IDisposable
             result.ErrorMessage = "Invalid request";
         }
 
-        var responseHeader = new PipePacketHeader
+        PipePacketHeader responseHeader = new PipePacketHeader
         {
             Version = PrivateNamedPipe.FullTrustVersion,
             Type = PipePacketType.Response,
@@ -175,18 +176,18 @@ public class NamedPipeServer : IDisposable
             ContentType = PipePacketContentType.Json
         };
         
-        serverStream.WritePacket(ref responseHeader, System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(result));
+        serverStream.WritePacket(ref responseHeader, JsonSerializer.SerializeToUtf8Bytes(result, AppJsonContext.Default.FullTrustGenericResult));
     }
 
     private async Task HandleResumeMainThreadRequestAsync(PipePacketHeader header)
     {
-        var result = new FullTrustGenericResult { Succeeded = ProcessManager.ResumeMainThread() };
+        FullTrustGenericResult result = new FullTrustGenericResult { Succeeded = ProcessManager.ResumeMainThread() };
         if (!result.Succeeded)
         {
             result.ErrorMessage = "Failed to resume main thread";
         }
 
-        var responseHeader = new PipePacketHeader
+        PipePacketHeader responseHeader = new PipePacketHeader
         {
             Version = PrivateNamedPipe.FullTrustVersion,
             Type = PipePacketType.Response,
@@ -194,6 +195,6 @@ public class NamedPipeServer : IDisposable
             ContentType = PipePacketContentType.Json
         };
         
-        serverStream.WritePacket(ref responseHeader, System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(result));
+        serverStream.WritePacket(ref responseHeader, JsonSerializer.SerializeToUtf8Bytes(result, AppJsonContext.Default.FullTrustGenericResult));
     }
 }

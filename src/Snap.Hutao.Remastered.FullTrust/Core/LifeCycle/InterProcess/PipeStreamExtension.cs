@@ -2,6 +2,9 @@ using System.Buffers;
 using System.IO.Hashing;
 using System.IO.Pipes;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
+using Snap.Hutao.Remastered.FullTrust;
+using Snap.Hutao.Remastered.FullTrust.Models;
 
 namespace Snap.Hutao.Remastered.FullTrust.Core.LifeCycle.InterProcess;
 
@@ -19,7 +22,40 @@ internal static class PipeStreamExtension
                 throw new InvalidOperationException("PipePacket Content Hash incorrect");
             }
 
-            return JsonSerializer.Deserialize<TData>(content);
+            // 使用源生成器上下文进行反序列化
+            return JsonSerializer.Deserialize<TData>(content, GetJsonTypeInfo<TData>());
+        }
+    }
+
+    private static JsonTypeInfo<TData> GetJsonTypeInfo<TData>()
+    {
+        // 根据类型返回相应的JsonTypeInfo
+        Type type = typeof(TData);
+        if (type == typeof(FullTrustProcessStartInfoRequest))
+        {
+            return (JsonTypeInfo<TData>)(object)AppJsonContext.Default.FullTrustProcessStartInfoRequest;
+        }
+        else if (type == typeof(FullTrustLoadLibraryRequest))
+        {
+            return (JsonTypeInfo<TData>)(object)AppJsonContext.Default.FullTrustLoadLibraryRequest;
+        }
+        else if (type == typeof(FullTrustGenericResult))
+        {
+            return (JsonTypeInfo<TData>)(object)AppJsonContext.Default.FullTrustGenericResult;
+        }
+        else if (type == typeof(FullTrustStartProcessResult))
+        {
+            return (JsonTypeInfo<TData>)(object)AppJsonContext.Default.FullTrustStartProcessResult;
+        }
+        else
+        {
+            // 回退到默认选项
+            JsonTypeInfo? typeInfo = AppJsonContext.Default.GetTypeInfo(type);
+            if (typeInfo is JsonTypeInfo<TData> typedInfo)
+            {
+                return typedInfo;
+            }
+            throw new InvalidOperationException($"No JsonTypeInfo found for type {type.Name}");
         }
     }
 
@@ -53,7 +89,8 @@ internal static class PipeStreamExtension
         header.Command = command;
         header.ContentType = PipePacketContentType.Json;
 
-        stream.WritePacket(ref header, JsonSerializer.SerializeToUtf8Bytes(data));
+        // 使用源生成器上下文进行序列化
+        stream.WritePacket(ref header, JsonSerializer.SerializeToUtf8Bytes(data, GetJsonTypeInfo<TData>()));
     }
 
     public static void WritePacket(this PipeStream stream, ref PipePacketHeader header, ReadOnlySpan<byte> content)

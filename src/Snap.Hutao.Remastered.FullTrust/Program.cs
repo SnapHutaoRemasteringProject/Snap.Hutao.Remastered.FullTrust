@@ -26,7 +26,7 @@ public static class Program
             Console.WriteLine("Press Ctrl+C to exit...");
 
             // 等待退出信号
-            var exitEvent = new ManualResetEvent(false);
+            ManualResetEvent exitEvent = new ManualResetEvent(false);
             Console.CancelKeyPress += (sender, e) =>
             {
                 e.Cancel = true;

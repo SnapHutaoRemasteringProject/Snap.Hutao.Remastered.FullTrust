@@ -13,7 +13,7 @@ public static class TestClient
         
         try
         {
-            using var client = new NamedPipeClientStream(
+            using NamedPipeClientStream client = new NamedPipeClientStream(
                 ".",
                 PrivateNamedPipe.FullTrustName,
                 PipeDirection.InOut,
@@ -23,7 +23,7 @@ public static class TestClient
             Console.WriteLine("Connected to FullTrust server");
             
             // 测试Create命令
-            var request = new FullTrustProcessStartInfoRequest
+            FullTrustProcessStartInfoRequest request = new FullTrustProcessStartInfoRequest
             {
                 ApplicationName = "notepad.exe",
                 CommandLine = "",
@@ -58,7 +58,7 @@ public static class TestClient
             }
             
             // 测试LoadLibrary命令（需要实际的DLL路径）
-            var loadRequest = FullTrustLoadLibraryRequest.Create("test.dll", "C:\\test.dll");
+            FullTrustLoadLibraryRequest loadRequest = FullTrustLoadLibraryRequest.Create("test.dll", "C:\\test.dll");
             client.WritePacketWithJsonContent(
                 PrivateNamedPipe.FullTrustVersion,
                 PipePacketType.Request,

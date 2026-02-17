@@ -133,10 +133,10 @@ public static class ProcessManager
 
             try
             {
-                var startupInfo = new STARTUPINFO();
+                STARTUPINFO startupInfo = new STARTUPINFO();
                 startupInfo.cb = Marshal.SizeOf<STARTUPINFO>();
 
-                var processInfo = new PROCESS_INFORMATION();
+                PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION();
 
                 string commandLine = string.IsNullOrEmpty(storedRequest.CommandLine)
                     ? $"\"{storedRequest.ApplicationName}\""
