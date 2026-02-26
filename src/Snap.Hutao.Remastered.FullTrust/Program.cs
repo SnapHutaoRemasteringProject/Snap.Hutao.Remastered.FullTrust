@@ -8,12 +8,6 @@ public static class Program
 
     public static int Main(string[] args)
     {
-        if (args.Length > 0 && args[0] == "--test")
-        {
-            TestClient.Test();
-            return 0;
-        }
-
         Console.WriteLine("Snap.Hutao.Remastered.FullTrust starting...");
 
         try
